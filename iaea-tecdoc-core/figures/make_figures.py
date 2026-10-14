@@ -104,7 +104,7 @@ sys.path.insert(0, THIS_DIR)
 import openmc
 from geometry import (
     PITCH_X, PITCH_Y, ELEM_X, ELEM_Y, ELEM_Z, GAP_X, GAP_Y,
-    SIDE_PLATE_THICK, ACTIVE_STACK_X,
+    SIDE_PLATE_THICK, ACTIVE_STACK_X, LATERAL_CLAD_MARGIN,
     N_PLATES_STD, PLATE_THICK_INNER, PLATE_THICK_OUTER,
     CLAD_THICK_INNER, CLAD_THICK_OUTER, MEAT_THICK, MEAT_WIDTH,
     WATER_CHAN_THICK, STD_STACK_HEIGHT, STD_END_WATER,
@@ -128,7 +128,11 @@ from figstyle import (
 OUT_DIR = THIS_DIR
 PAD_INCHES = 0.02
 
-LATERAL_CLAD_MARGIN = (ACTIVE_STACK_X - MEAT_WIDTH) / 2.0
+# LATERAL_CLAD_MARGIN was defined here and asserted > 0 in
+# check_geometry_consistency(). It is a geometry constant, not a figure
+# quantity, so it now lives in geometry.py (imported above) with a
+# MIN_RESIDUAL_GAP floor — which runs on every import of the model, not only
+# when somebody rebuilds the figures. Same arithmetic, same value.
 SIDE_INNER = ACTIVE_STACK_X / 2.0
 
 # fig3 is cut through the ABSORBER SLOT, not y = 0: an axial figure of a control
@@ -242,7 +246,9 @@ def check_geometry_consistency():
            + (N_PLATES_STD - 1) * WATER_CHAN_THICK)
     assert abs(std - STD_STACK_HEIGHT) < 1e-12
     assert abs(STD_STACK_HEIGHT + 2 * STD_END_WATER - ELEM_Y) < 1e-12
-    assert LATERAL_CLAD_MARGIN > 0
+    # `assert LATERAL_CLAD_MARGIN > 0` removed 2026-08-24: strictly implied by
+    # the LATERAL_CLAD_MARGIN >= MIN_RESIDUAL_GAP floor in geometry.py, which
+    # has already run at import time by the time this function is called.
     ctrl = (N_CTRL_FUEL_PLATES * PLATE_THICK_INNER
             + (N_CTRL_FUEL_PLATES - 1) * WATER_CHAN_THICK)
     assert abs(ctrl / 2 - CTRL_FUEL_STACK_HALF) < 1e-12
