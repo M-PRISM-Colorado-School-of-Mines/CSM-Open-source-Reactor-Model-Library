@@ -1,0 +1,5 @@
+run_results/
+__pycache__/
+*.h5
+*.xml
+*.out

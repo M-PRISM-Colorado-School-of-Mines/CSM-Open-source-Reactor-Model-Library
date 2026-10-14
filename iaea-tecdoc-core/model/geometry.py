@@ -83,6 +83,31 @@ from materials import (fuel, clad, water, water_core, b4c, graphite, aluminum,
                        end_box_homog, N_X_ZONES, N_AXIAL_ZONES, make_zoned_fuel)
 
 # =============================================================================
+# NUMERICAL FLOORS
+# =============================================================================
+
+# Smallest residual gap this model is willing to emit as a real coolant region.
+#
+# WHAT THIS IS FOR. Most water gaps here are RESIDUALS — what is left of an
+# envelope after the solids inside it are subtracted. A residual has no lower
+# bound of its own: edit a thickness upstream and the gap shrinks silently,
+# through "thin", through "sub-millimetre", to zero and then negative, and the
+# only symptom is a sliver cell that eats tracking time or an inverted region
+# that OpenMC reports as a hole. A `> 0` assert catches only the last of those.
+# This floor catches the approach.
+#
+# 0.01 cm (0.1 mm) is [ASSUMED] — our own choice, no external authority. It is
+# an order of magnitude under the smallest real coolant dimension in the model
+# (WATER_CHAN_THICK = 0.219) and an order of magnitude over float noise on
+# these derivation chains (~1e-12), so it separates "someone made a mistake"
+# from "this is genuinely a thin channel" without being sensitive to rounding.
+#
+# ONE DELIBERATE EXEMPTION EXISTS: ABSORBER_SIDE_WATER (0.005) is half this
+# floor and is CORRECT — see the exception at its definition, which enforces
+# the exemption rather than merely tolerating it.
+MIN_RESIDUAL_GAP = 0.01   # cm                                        [ASSUMED]
+
+# =============================================================================
 # LATTICE / ELEMENT ENVELOPE
 # =============================================================================
 
@@ -179,8 +204,54 @@ MEAT_WIDTH = 6.3             # cm (63 mm)    meat width
 # Outer plates (first/last in the stack) are clad at the outer thickness on
 # BOTH faces of the meat, not just the face away from the stack — so their
 # total thickness is meat + 2*CLAD_THICK_OUTER, not meat + inner + outer.
+#
+# HISTORY — READ BEFORE "CORRECTING" THIS BACK TO A LITERAL. Until 4bfd5d5 this
+# was hardcoded `PLATE_THICK_OUTER = 0.1385`, i.e. meat + inner + outer, which
+# is the wrong construction: it clads the inward face at the INNER thickness.
+# 4bfd5d5 replaced the literal with the derivation and moved the value to the
+# 0.15 that Table 1 and the reference MCNP model both carry. The literal is
+# gone deliberately — it cannot drift out of step with the clad and meat
+# constants it is made of, and the assert below is what says so.
+#
+# WARNING ON THE LOG MESSAGES. The 0.1385 era is still visible in commit
+# messages and in older run logs, where the outer plate is reported at
+# 1.385 mm. Those numbers describe a superseded geometry. Any log or archived
+# result printing 1.385 predates 4bfd5d5 and must not be compared against
+# current output as though the two were the same model.
 PLATE_THICK_OUTER = MEAT_THICK + 2 * CLAD_THICK_OUTER   # 0.15 cm  [DERIVED]
                                                         # (1.5 mm, MCNP MATCH)
+
+# The INNER plate is the other side of the same construction, and unlike the
+# outer plate it is a primary [TECDOC] literal rather than a derivation — so
+# nothing forces it to stay consistent with the meat and clad it is made of.
+# This is that force. It is what makes a lone MEAT_THICK edit fail loudly
+# instead of quietly producing a plate whose parts no longer sum to it.
+#
+# NOTE FOR THE "thick" CONFIGURATION: the OQ-3 cascade (meat primary, plate
+# thicknesses derived from it) is not implemented until the spec layer, so
+# until then MEAT_THICK and PLATE_THICK_INNER must be edited TOGETHER. This
+# assert refusing a lone MEAT_THICK edit is the assert working, not a defect.
+assert abs((PLATE_THICK_INNER - 2 * CLAD_THICK_INNER) - MEAT_THICK) < 1e-12, (
+    f"inner plate does not decompose: PLATE_THICK_INNER {PLATE_THICK_INNER} "
+    f"- 2 x CLAD_THICK_INNER {CLAD_THICK_INNER} = "
+    f"{PLATE_THICK_INNER - 2 * CLAD_THICK_INNER}, not MEAT_THICK {MEAT_THICK}")
+
+# Lateral aluminum margin — the clad shoulder each side of the meat, between
+# the 6.3 cm meat width and the 6.64 cm clear span between the side plates.
+# Residual, never a literal.
+#
+# This lived in figures/make_figures.py as a local definition with a bare
+# `> 0` assert, which meant the constraint only ran when somebody built the
+# figures. It belongs next to the constants it is made of, and it is imported
+# from here now — the figure module no longer defines its own.
+LATERAL_CLAD_MARGIN = (ACTIVE_STACK_X - MEAT_WIDTH) / 2.0   # 0.17 cm [DERIVED]
+
+assert LATERAL_CLAD_MARGIN >= MIN_RESIDUAL_GAP, (
+    f"lateral clad margin is {LATERAL_CLAD_MARGIN:.6f} cm, under the "
+    f"{MIN_RESIDUAL_GAP} cm floor — the meat is running out to the side "
+    f"plates. Check MEAT_WIDTH ({MEAT_WIDTH}) against ACTIVE_STACK_X "
+    f"({ACTIVE_STACK_X}); at MEAT_WIDTH >= 6.62 the shoulder goes sub-floor "
+    f"and at 6.64 the meat touches the side plates outright")
 
 # Plate counts. Table 1: 23 plates per standard element, "17 + 4 Al plates"
 # per control element. [TECDOC A-2 Table 1, Fuel Element] (MCNP MATCH)
@@ -199,7 +270,16 @@ STD_STACK_HEIGHT = (2 * PLATE_THICK_OUTER
 # Exterior (element-end) coolant channel: 0.1075. A3 leaves this [DERIVED] —
 # the MCNP column is blank, so there is nothing to reconcile it against yet.
 STD_END_WATER = (ELEM_Y - STD_STACK_HEIGHT) / 2.0             # 0.1075 cm  [DERIVED]
-assert STD_END_WATER > 0, "standard element end water gap must be positive"
+
+# Was `> 0`. That only caught the gap after it had already inverted; this is a
+# pure residual of a 23-plate stack inside a fixed envelope, so every plate,
+# clad and channel thickness above feeds it and any of them can walk it down.
+# At the 0.1075 default there is a factor of ten of headroom over the floor.
+assert STD_END_WATER >= MIN_RESIDUAL_GAP, (
+    f"standard element end water gap is {STD_END_WATER:.6f} cm, under the "
+    f"{MIN_RESIDUAL_GAP} cm floor — the {N_PLATES_STD}-plate stack "
+    f"({STD_STACK_HEIGHT:.6f} cm) has grown to fill the {ELEM_Y} cm envelope. "
+    f"Check the plate, clad and channel thicknesses that feed it")
 
 # Flux trap cylindrical water hole radius. [MCNP] — Kyle confirmed, closes A1
 # (2026-07-31). Area-equivalent to the 50 mm square hole: 25 cm^2 gives
@@ -266,17 +346,57 @@ CORE_BOTTOM      = -90.0   # cm — vacuum boundary; symmetric with CORE_TOP  [M
 # end-box losing 1 cm are the same centimetre — +/-45 and +/-90 do not move.
 ENDBOX_HEIGHT    = 14.0    # cm — homogenized end-box height            [MCNP]
 
+# BENCHMARK PIN. ENDBOX_HEIGHT is a primary [MCNP] literal, and every axial
+# tripwire below it is written in terms of ENDBOX_HEIGHT itself — so they all
+# stay satisfied for ANY value it takes, sliding +/-45 up and down the model
+# with it. The axial stack still sums to 180 because POOL_WATER_AXIAL is the
+# residual that absorbs the change. Nothing downstream notices, and the model
+# builds a geometry that is no longer the benchmark.
+#
+# This pin is the only thing in the file that holds the value itself. It is
+# deliberately a bare literal compared against a bare literal: writing it in
+# terms of anything else here would make it slide too.
+assert abs(ENDBOX_HEIGHT - 14.0) < 1e-12, (
+    f"ENDBOX_HEIGHT is {ENDBOX_HEIGHT}, not the 14.0 cm of the reference "
+    f"MCNP model. The axial tripwires below are all written in terms of "
+    f"ENDBOX_HEIGHT and will happily pass at the wrong value — POOL_WATER_AXIAL "
+    f"absorbs the difference and the stack still sums to 180 cm. If this is a "
+    f"deliberate revision, change it here and re-run the cross-validation; do "
+    f"not delete the pin")
+
 ENDBOX_ABOVE_TOP = HALF_PLATE_Z + ENDBOX_HEIGHT    # +45.0 cm           [DERIVED]
 ENDBOX_BELOW_BOT = -ENDBOX_ABOVE_TOP               # −45.0 cm           [DERIVED]
 POOL_WATER_AXIAL = CORE_TOP - ENDBOX_ABOVE_TOP     # +45.0 cm           [DERIVED]
+
+# POOL_WATER_AXIAL is the axial residual — CORE_TOP minus everything stacked
+# under it. It is what silently absorbs an ENDBOX_HEIGHT or PLATE_HEIGHT edit
+# (see the pin above), so it is the one axial quantity that can go to zero or
+# invert while every symmetry and sum tripwire below still passes.
+assert POOL_WATER_AXIAL >= MIN_RESIDUAL_GAP, (
+    f"upper pool water is {POOL_WATER_AXIAL:.6f} cm, under the "
+    f"{MIN_RESIDUAL_GAP} cm floor — the end-box top ({ENDBOX_ABOVE_TOP}) has "
+    f"reached CORE_TOP ({CORE_TOP}). Check ENDBOX_HEIGHT ({ENDBOX_HEIGHT}) "
+    f"and PLATE_HEIGHT ({PLATE_HEIGHT})")
 
 # Symmetry / height tripwires. Documentation + guard only: none of these feed a
 # cell or surface directly. Tolerance-based, not ==, since every value here is
 # now the end of a float derivation chain.
 assert abs(CORE_TOP + CORE_BOTTOM) < 1e-12, "axial model must be symmetric about z=0"
 assert abs((CORE_TOP - CORE_BOTTOM) - 180.0) < 1e-12, "total axial height must be 180 cm"
-assert abs((CORE_TOP - ENDBOX_ABOVE_TOP) - POOL_WATER_AXIAL) < 1e-12, \
-    "upper water region must be POOL_WATER_AXIAL"
+# REMOVED 2026-08-24 — the upper-water assert was vacuous. It read
+#     assert abs((CORE_TOP - ENDBOX_ABOVE_TOP) - POOL_WATER_AXIAL) < 1e-12
+# and POOL_WATER_AXIAL is DEFINED as CORE_TOP - ENDBOX_ABOVE_TOP twenty lines
+# above, so it compared an expression to itself and could not fail for any
+# input. It is replaced by nothing, because there is nothing here to check: the
+# real constraint on the upper water is the floor assert at POOL_WATER_AXIAL's
+# definition. Recorded rather than silently dropped so this is not read as a
+# lost check.
+#
+# The LOWER twin below is KEPT and is NOT the same case. It compares
+# ENDBOX_BELOW_BOT - CORE_BOTTOM against POOL_WATER_AXIAL, which is built from
+# the TOP pair — so it is vacuous only while the model is symmetric, and that
+# symmetry is an assumption enforced by the assert above, not a definition. It
+# is a real cross-check that the bottom mirrors the top.
 assert abs((ENDBOX_BELOW_BOT - CORE_BOTTOM) - POOL_WATER_AXIAL) < 1e-12, \
     "lower water region must be POOL_WATER_AXIAL"
 assert abs((ENDBOX_ABOVE_TOP - HALF_PLATE_Z) - ENDBOX_HEIGHT) < 1e-12, \
@@ -821,6 +941,49 @@ assert 0.0 < ABSORBER_WIDTH < ACTIVE_STACK_X, \
 assert ABSORBER_SIDE_WATER > 0.0, \
     "absorber side water film is degenerate — check ABSORBER_WIDTH"
 
+# THE ONE EXEMPTION FROM MIN_RESIDUAL_GAP, MADE SELF-ENFORCING.
+#
+# ABSORBER_SIDE_WATER is 0.005 cm — half the 0.01 cm floor. That is CORRECT and
+# deliberate: it is not a residual that got away from us, it is the real
+# clearance between a 6.630 blade and the 6.640 channel it slides in, and both
+# numbers are [MCNP]. Exempting it with a comment would leave the exemption
+# unpoliced, so the exemption is written as its own check instead.
+#
+# READ THE DIRECTION CAREFULLY — THIS FIRES WHEN THE FILM GETS *BIGGER*.
+# The condition is `< MIN_RESIDUAL_GAP`, so it holds while the film stays
+# sliver-scale and fires once it stops being one. That is the point: a film at
+# or above the floor is no longer the tight blade-in-channel clearance this
+# exemption was granted for, which means something upstream moved and the
+# exemption needs re-deciding rather than silently widening.
+#
+# Three ways in, all measured:
+#   * SIDE_PLATE_THICK was reduced to about 0.474 or less — ACTIVE_STACK_X
+#     widens, the channel opens up around a fixed blade. (At exactly 0.475 the
+#     film lands on 0.01 from below by ~2e-16 and this still passes; the
+#     threshold is a float edge, not a round number.)
+#   * ABSORBER_WIDTH was lowered to about 6.61 or less -- the blade is
+#     over-narrow and the side film is no longer sliver-scale. (Widening it
+#     back toward ACTIVE_STACK_X does NOT fire this; that drives the film to
+#     zero and trips ABSORBER_SIDE_WATER > 0 above.) Like the SIDE_PLATE_THICK
+#     row, the threshold is a float edge and not a round number: at exactly
+#     6.62 the film lands on 0.01 from below by ~2e-16 and this still passes.
+#   * MIN_RESIDUAL_GAP itself was lowered to at or below the film — at 0.004
+#     the exemption becomes unnecessary and this says so, because an exemption
+#     that no longer exempts anything should not stay on the books.
+if not ABSORBER_SIDE_WATER < MIN_RESIDUAL_GAP:
+    raise AssertionError(
+        f"ABSORBER_SIDE_WATER is {ABSORBER_SIDE_WATER:.6f} cm, no longer below "
+        f"the {MIN_RESIDUAL_GAP} cm floor it is exempted from.\n"
+        f"This film is deliberately sub-floor (0.005 = the 6.640 channel minus "
+        f"the 6.630 blade, halved). It reaching the floor means one of:\n"
+        f"  * SIDE_PLATE_THICK reduced to about 0.474 or less "
+        f"(now {SIDE_PLATE_THICK}, giving ACTIVE_STACK_X {ACTIVE_STACK_X:.6f})\n"
+        f"  * ABSORBER_WIDTH lowered to about 6.61 or less "
+        f"(now {ABSORBER_WIDTH}) — an over-narrow blade, NOT an undoing of B3\n"
+        f"  * MIN_RESIDUAL_GAP lowered to at or below the film "
+        f"(now {MIN_RESIDUAL_GAP}), which retires the exemption\n"
+        f"Decide which, then update the exemption — do not delete this check.")
+
 CTRL_FUEL_WIDTH_X   = ACTIVE_STACK_X
 CTRL_SIDE_PLATE_X   = SIDE_PLATE_THICK
 # Unfueled (control-element) plate thickness. B5: ours is the CORRECT side —
@@ -912,6 +1075,27 @@ assert CTRL_BLADE_WATER >= 0.05, (
     f"CTRL_BLADE_WATER={CTRL_BLADE_WATER:.5f} cm is degenerate for "
     f"CTRL_AL_PLATE_THICK={CTRL_AL_PLATE_THICK}, "
     f"CTRL_OUTER_OFFSET={CTRL_OUTER_OFFSET} — check end-block budget")
+
+# TRIPWIRE, NOT A BOUND. The 0.05 above is the real physical limit for this
+# channel and it binds first — at the 0.1275 default there is 0.0775 cm of
+# headroom to it and 0.1175 cm to the floor, so in ordinary operation this line
+# is unreachable and is MEANT to be.
+#
+# It is here so that the universal floor applies universally. CTRL_BLADE_WATER
+# is a residual of the control end-block budget, and every other residual in
+# this file is now floored; leaving this one governed solely by a local 0.05
+# would mean a future edit that relaxes or removes that bound drops the channel
+# straight out from under the model-wide floor with nothing left to catch it.
+# If this ever fires, the 0.05 bound above has been weakened — look there
+# first, not here.
+assert CTRL_BLADE_WATER >= MIN_RESIDUAL_GAP, (
+    f"CTRL_BLADE_WATER={CTRL_BLADE_WATER:.5f} cm is under the "
+    f"{MIN_RESIDUAL_GAP} cm floor. This should be UNREACHABLE — the 0.05 bound "
+    f"above binds first. Reaching it means that bound was relaxed or removed. "
+    f"Check the end-block budget: CTRL_END_BLOCK={CTRL_END_BLOCK}, "
+    f"CTRL_FEEDER_CHANNEL={CTRL_FEEDER_CHANNEL}, "
+    f"CTRL_AL_PLATE_THICK={CTRL_AL_PLATE_THICK}, "
+    f"CTRL_OUTER_OFFSET={CTRL_OUTER_OFFSET}")
 
 
 def make_control_fuel_element(elem_id, withdrawn_fraction=0.0,
@@ -1575,10 +1759,20 @@ assert abs(2 * POOL_HALF_X - 123.2) < 1e-9, \
 assert abs(2 * POOL_HALF_Y - 133.7) < 1e-9, \
     f"model y-extent is {2 * POOL_HALF_Y}, expected 133.7 " \
     f"(7 x {PITCH_Y} + 2 x {POOL_WATER_THICK})"
-assert abs((POOL_HALF_X - CORE_HALF_X) - POOL_WATER_THICK) < 1e-12, \
-    "pool x-face is not POOL_WATER_THICK outboard of the lattice envelope"
-assert abs((POOL_HALF_Y - CORE_HALF_Y) - POOL_WATER_THICK) < 1e-12, \
-    "pool y-face is not POOL_WATER_THICK outboard of the lattice envelope"
+# REMOVED 2026-08-24 — the two pool-face asserts were vacuous on BOTH axes.
+# They read
+#     assert abs((POOL_HALF_X - CORE_HALF_X) - POOL_WATER_THICK) < 1e-12
+#     assert abs((POOL_HALF_Y - CORE_HALF_Y) - POOL_WATER_THICK) < 1e-12
+# and POOL_HALF_X/Y are DEFINED as CORE_HALF_X/Y + POOL_WATER_THICK on the two
+# lines immediately above, so each recomputed its own definition and subtracted
+# it from itself. Unlike the lower-water assert further up — which is vacuous
+# only under an enforced symmetry assumption and is therefore kept — these had
+# no such standing: no input makes either one fail.
+#
+# The real lateral constraints are the two extent tripwires retained above,
+# which compare against the independent 123.2 / 133.7 literals, and the
+# POOL_WATER_THICK > 0 check. Recorded rather than silently dropped so this is
+# not read as a lost check.
 
 
 # =============================================================================
