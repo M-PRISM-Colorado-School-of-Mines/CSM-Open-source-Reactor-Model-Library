@@ -10,235 +10,176 @@ Reference:
     Appendix A-2: Generic 10 MW Reactor — Argonne National Laboratory.
 
 Units:
-    All densities in g/cm^3.
-    All enrichments in weight percent unless noted.
+    Base-material compositions are atom densities in atom/b-cm.
+    Mass densities quoted in comments are g/cm^3.
 """
 
 import openmc
 
-# Natural carbon (C0, ZAID 6000) vs. an explicit C12/C13 isotopic split.
+# =============================================================================
+# SOURCE OF EVERY BASE MATERIAL: docs/reference_materials.csv (from the
+# reference MCNP model) — one row per nuclide, with temperature and thermal
+# scattering per material. tests/test_reference_materials.py checks every
+# nuclide density here against it to 1e-6 relative.
 #
-# GATES BOTH CARBON-BEARING MATERIALS: b4c and graphite. It used to gate only
-# graphite, with b4c hardcoded to the split — so the flag's name promised more
-# than it delivered and the two materials could disagree about what carbon is.
+# Every base material is written the same way: add_nuclide() with the
+# reference atom density (atom/b-cm), then set_density('atom/b-cm', N) with
+# N = the SUM of those nuclide densities, so each one is reproduced exactly.
+# Temperatures are the reference values too; the test checks them.
+# =============================================================================
+
+# Natural carbon (C0) vs. OpenMC's natural C12/C13 expansion.
 #
-# The reference MCNP model specifies natural carbon (card 6000) for both. This
-# flag therefore selects a LIBRARY BASIS, not a physics choice:
-#   False -> C12/C13. ENDF/B-VIII.0 has no natural-carbon evaluation, so the
-#            split is the only way to represent card 6000 there. It is an
-#            OpenMC-side method artifact with no MCNP counterpart, and the
-#            cross-validation spreadsheet carries those rows as N/A.
-#   True  -> C0. The exact counterpart of card 6000, available on a matched
-#            ENDF/B-VII.0 library.
-#
-# PROJECT_BIBLE §6 makes the choice conditional on which library is active.
-# ONLY THE VIII.0 BRANCH HAS BEEN IMPLEMENTED AND RUN; the C0 branch is written
-# but has never been exercised, because no VII.0 library is configured here.
-# Switching this to True is not a one-line change in practice — USE_AL_SAB has
-# the same library dependency and must move with it.
-#
-# The abundance convention below (0.9893 / 0.0107) is COSMETIC for validation
-# purposes: the comparison against the reference is on TOTAL carbon
-# (2.005592e-02 atom/b-cm), which both branches reproduce exactly. The split
-# only redistributes that total between two nuclides.
+# Gates BOTH carbon-bearing materials, b4c and graphite. The reference MCNP
+# model uses natural carbon for both, so this flag selects a LIBRARY BASIS,
+# not a physics choice:
+#   False -> add_element('C'): OpenMC's natural abundances (0.988922 C12 /
+#            0.011078 C13). ENDF/B-VIII.0 has no C0 evaluation, so this is the
+#            only way to represent natural carbon there. Both materials
+#            expand the SAME way — b4c used to hard-code 0.9893/0.0107 while
+#            graphite used OpenMC's split; that disagreement is gone.
+#   True  -> C0, the exact counterpart, on a library that has it (a matched
+#            ENDF/B-VII.0). Written, never exercised here.
+# Total carbon equals the reference on either branch; the split only
+# redistributes it.
 USE_NATURAL_CARBON = False
 
-# Al metal thermal scattering S(a,b) (c_Al27). Enabled per the 2026-07-20
-# meeting decision ("We will add Al-27 SaB libraries"). The active
-# ENDF/B-VIII.0 library ($OPENMC_CROSS_SECTIONS) provides c_Al27; ENDF/B-VII.0
-# does not, so this must revert to False if the library is switched back.
+# Al metal thermal scattering S(a,b) (c_Al27) on the two pure-Al materials,
+# clad and aluminum — the reference MCNP model carries an Al-27 table on
+# exactly those two. NOT on end_box_homog, which carries light water only.
+# ENDF/B-VIII.0 provides c_Al27; ENDF/B-VII.0 does not, so this must go False
+# on a VII.0 library.
 USE_AL_SAB = True
 
 # =============================================================================
 # FUEL MATERIAL
-# LEU U3Si2-Al fuel, 19.75 w/o enriched uranium
-# Atom densities (atom/b-cm) taken directly from the reference MCNP model.
-# NO thermal scattering table on the fuel (it has no mt card for it).
+# LEU U3Si2-Al fuel, 19.75 w/o enriched uranium.
+# NO thermal scattering on the fuel (none in the reference MCNP model).
 # =============================================================================
 
 fuel = openmc.Material(name='LEU_U3Si2_Al_fuel')
 fuel.temperature = 332.1
-fuel.add_nuclide('U235', 2.251800e-03)   # atom/b-cm
-fuel.add_nuclide('U238', 9.034100e-03)
-fuel.add_nuclide('Al27', 3.256300e-02)
-fuel.add_nuclide('Si28', 6.938766e-03)
-fuel.add_nuclide('Si29', 3.524947e-04)
-fuel.add_nuclide('Si30', 2.326390e-04)
-fuel.set_density('sum')
+fuel.add_nuclide('U235', 2.251800E-03)   # atom/b-cm
+fuel.add_nuclide('U238', 9.034100E-03)
+fuel.add_nuclide('Al27', 3.256300E-02)
+fuel.add_nuclide('Si28', 6.938766E-03)
+fuel.add_nuclide('Si29', 3.524947E-04)
+fuel.add_nuclide('Si30', 2.326390E-04)
+fuel.set_density('atom/b-cm', 5.1372800E-02)   # sum of the lines above
 
 # =============================================================================
 # CLADDING MATERIAL
-# 6061-T6 Aluminum alloy (standard MTR fuel plate cladding)
-# Density: 2.70 g/cm3
+# Pure Al-27 at 6.026260E-02 atom/b-cm, standing in for 6061-T6 exactly as the
+# reference MCNP model does. (This was 2.70 g/cm3 via add_element('Al'), which
+# gives 6.026261E-02 — 2.2e-7 off the reference. The reference governs.)
 # =============================================================================
 
 clad = openmc.Material(name='Al_6061_cladding')
-clad.temperature = 330.7 
-clad.set_density('g/cm3', 2.70)
-clad.add_element('Al', 1.00, 'ao')
-# Pure aluminum stands in for 6061-T6. [MCNP] — this is NOT an approximation we
-# chose independently: the reference MCNP model does the same thing, and the
-# resulting Al-27 number densities agree exactly.
-#   OpenMC 6.026261E-02  vs  MCNP 6.026260E-02  atoms/b-cm  —  MATCH, 0.0000%
-# Al metal S(a,b) (c_Al27) added per the 2026-07-20 meeting decision, gated on
-# USE_AL_SAB (ENDF/B-VIII.0 provides c_Al27; VII.0 does not).
+clad.temperature = 330.7
+clad.add_nuclide('Al27', 6.026260E-02)
+clad.set_density('atom/b-cm', 6.026260E-02)
 if USE_AL_SAB:
     clad.add_s_alpha_beta('c_Al27')
 
 # =============================================================================
-# COOLANT / MODERATOR
-# Two water materials per reference MCNP model cross-section assignments:
-#   - Outer pool water: 0.9975 g/cm³ at 294 K   (H1 = 6.66909e-2 atom/b-cm)
-#     Only the water OUTSIDE the core lattice footprint (the reflector-side
-#     boundary ring) uses this — it is not core coolant.
-#   - Core water:       0.9909 g/cm³ at 316.8 K (H1 = 6.625423e-2 atom/b-cm)
-#     Every water feature INSIDE the core (inter-element gaps, plate/channel
-#     water, end-box water, graphite channels, flux-trap holes, etc.) uses
-#     this — it is the coolant water throughout the core, not a flux-trap-
-#     specific material.
-# (Mass densities print ~0.02% lower than the nominal values because the
-# O-16-only basis has a slightly lower molar mass than natural oxygen; the
-# H1/O16 atom densities above are the authoritative quantities.)
+# COOLANT / MODERATOR — two water materials, H-1 + O-16 ONLY
+#   - water      294.0 K. The bulk water: the lateral pool box, the axial
+#     water beyond |z| = 45 cm in every lattice position, and the absorber
+#     slot above the moving blade cap (geometry.py governs).
+#   - water_core 316.8 K. Every in-core coolant region: plate channels,
+#     inter-element gaps, flux-trap holes, graphite gaps, and the absorber
+#     slot below the blade.
+# O-16 is the reference value, NOT H1/2: for the pool water H1/2 = 3.334545E-02
+# is 1.5e-6 off the reference 3.334550E-02.
 # =============================================================================
 
-# Water is H-1 + O-16 ONLY (no H-2/O-17/O-18), matching the reference MCNP
-# model's O-16 basis.
 water = openmc.Material(name='light_water_294K')
 water.temperature = 294.0
-water.add_nuclide('H1', 6.66909e-02)
-water.add_nuclide('O16', 6.66909e-02 / 2.0)
-water.set_density('sum')
+water.add_nuclide('H1',  6.669090E-02)
+water.add_nuclide('O16', 3.334550E-02)
+water.set_density('atom/b-cm', 1.0003640E-01)   # sum of the lines above
 water.add_s_alpha_beta('c_H_in_H2O')
 
 water_core = openmc.Material(name='light_water_core_316K')
 water_core.temperature = 316.8
-water_core.add_nuclide('H1', 6.625423e-02)
-water_core.add_nuclide('O16', 6.625423e-02 / 2.0)
-water_core.set_density('sum')
+water_core.add_nuclide('H1',  6.625423E-02)
+water_core.add_nuclide('O16', 3.312711E-02)
+water_core.set_density('atom/b-cm', 9.9381340E-02)   # sum of the lines above
 water_core.add_s_alpha_beta('c_H_in_H2O')
 
 # =============================================================================
 # CONTROL BLADE MATERIAL
-# B4C absorber, defined by atom densities from the reference MCNP model [MCNP].
-# set_density('sum') -> 2.000 g/cm3 [DERIVED].
-# The card is not natural stoichiometric B4C. Both departures are as given by
-# the MCNP card (ratios of its atom densities), not chosen here:
-#   B:C  = 4.45                (not 4.0)
-#   B-10 = 21.5 at% of boron   (not natural 19.9%)
+# Mass density is 2.000 g/cm3 [DERIVED]. The reference composition is not
+# natural stoichiometric B4C; both departures are ratios of its atom
+# densities, not chosen here:
+#   B:C  = 4.450                 (not 4.0)
+#   B-10 = 21.46 at% of boron    (not natural 19.9%)
+# N below is the nuclide sum, 1.0930977E-01. The reference model's stated
+# total, 1.093098E-01, is that sum rounded 2.7e-7 high; using it would scale
+# every nuclide by the same 2.7e-7.
+# NO S(a,b) (none in the reference MCNP model).
 # =============================================================================
 
 b4c = openmc.Material(name='B4C control absorber')
 b4c.temperature = 294.0
-b4c.add_nuclide('B10', 1.914973e-02)
-b4c.add_nuclide('B11', 7.010412e-02)
-# Carbon gated on USE_NATURAL_CARBON, matching graphite below. Total carbon is
-# 2.005592e-02 atom/b-cm either way; the flag only chooses how it is
-# represented. The False branch runs the same two calls in the same order this
-# block always did, so the exported material is unchanged on VIII.0.
+b4c.add_nuclide('B10', 1.914973E-02)
+b4c.add_nuclide('B11', 7.010412E-02)
 if USE_NATURAL_CARBON:
-    b4c.add_nuclide('C0', 2.005592e-02)
+    b4c.add_nuclide('C0', 2.005592E-02)
 else:
-    b4c.add_nuclide('C12', 2.005592e-02 * 0.9893)
-    b4c.add_nuclide('C13', 2.005592e-02 * 0.0107)
-b4c.set_density('sum')
-
-# 2026-08-24: an orphaned second C12/C13 pair sat here, commented out, outside
-# any branch and after set_density('sum'), duplicating the live lines above. It
-# was dead, but it was the only other place the abundance convention appeared,
-# so it read as a live alternative rather than as residue. Deleted.
-#
-# HOW IT GOT HERE — b4c's carbon was switched twice, and this was left behind
-# by the FIRST switch, not the second:
-#   4bfd5d5  split -> C0.  The displaced C12/C13 lines were commented out
-#                          rather than deleted. That is this pair.
-#   290bb77  C0 -> split.  Reinstated the split as live code and commented out
-#                          C0 instead. It never touched 4bfd5d5's residue, so
-#                          the pair survived as a duplicate of the new live
-#                          lines and stopped being an alternative to anything.
-# Neither commit message mentions carbon (they read "added some bugs" and
-# "more bugs"), so the history above is reconstructed from the diffs and is
-# recorded here because the log does not carry it.
-
-# NO S(a,b) on B4C carbon (the reference MCNP model has no mt card for it).
-
+    b4c.add_element('C', 2.005592E-02)   # same expansion as graphite
+b4c.set_density('atom/b-cm', 1.0930977E-01)   # sum of the lines above
 
 # =============================================================================
 # REFLECTOR MATERIAL
-# Graphite reflector blocks surrounding the core.
-#
-# Density: 8.724000E-02 atoms/b-cm total carbon, taken DIRECTLY from the
-# reference MCNP model card m00005 [MCNP]:
-#
-#   m00005     $     294.0    Graphite reflector
-#          6000    8.724000E-02
-#
-# TECDOC-643 specifies no graphite density; neither model assigns a mass
-# density to this material — the atom density above is the specification on
-# both sides. The 1.7400 g/cm3 previously here was this same atom density
-# back-converted and rounded (8.724000E-02 -> 1.74000 g/cm3 using OpenMC's
-# isotopic masses, M_eff = 12.01112 from 0.988922 x 12.000000 +
-# 0.011078 x 13.00335484); it reproduced the atom density to 0.0003%, inside
-# the 0.010% tolerance. Specifying in atom/b-cm removes even that round-off.
-#
-# Card 6000 is natural carbon, unsplit. OpenMC's add_element('C') expands to
-# C-12/C-13 (no natural-carbon evaluation exists in ENDF/B-VIII.0), so the
-# C-12/C-13 split below is an OpenMC-side method artifact with no MCNP
-# counterpart — the spreadsheet carries those rows as N/A on the MCNP side.
-# For a VII.0 matched-library run the exact counterpart is the C0 nuclide
-# (USE_NATURAL_CARBON branch below).
+# 8.724000E-02 atom/b-cm natural carbon. TECDOC-643 specifies no graphite
+# density; the atom density is the specification on both sides (1.7400 g/cm3
+# is the same number back-converted).
 # =============================================================================
 
 graphite = openmc.Material(name='graphite_reflector')
-graphite.temperature = 294.0                      # card m00005: $ 294.0
+graphite.temperature = 294.0
 if USE_NATURAL_CARBON:
-    graphite.add_nuclide('C0', 1.0)
+    graphite.add_nuclide('C0', 8.724000E-02)
 else:
-    graphite.add_element('C', 1.0)
+    graphite.add_element('C', 8.724000E-02)
 graphite.set_density('atom/b-cm', 8.724000E-02)
 graphite.add_s_alpha_beta('c_Graphite')
 
 # =============================================================================
 # STRUCTURAL ALUMINUM
-# Pure aluminum for grid plates, side plates, core structure
-# Density: 2.70 g/cm3
+# Side plates, CFE guide plates, flux-trap blocks, blade top clad. Same
+# composition as clad, but at 294.0 K, the reference MCNP model's structural
+# aluminum temperature (it was 330.7 K, the cladding value, until 2026-10-19).
 # =============================================================================
 
 aluminum = openmc.Material(name='aluminum_structure')
-aluminum.temperature = 330.7
-aluminum.set_density('g/cm3', 2.70)
-aluminum.add_element('Al', 1.0, 'ao')
-# Al metal S(a,b) (c_Al27) added per the 2026-07-20 meeting decision, gated on
-# USE_AL_SAB.
+aluminum.temperature = 294.0
+aluminum.add_nuclide('Al27', 6.026260E-02)
+aluminum.set_density('atom/b-cm', 6.026260E-02)
 if USE_AL_SAB:
     aluminum.add_s_alpha_beta('c_Al27')
 
 # =============================================================================
 # END-BOX HOMOGENIZED MATERIAL
-# Homogenized Al/water end box. Atom densities from the reference MCNP model,
-# card m00004, at 316.8 K [MCNP]. set_density('sum') -> 1.41806 g/cm3 [DERIVED].
-# The mix is exactly 25 v/o Al / 75 v/o CORE water (water_core, not the 294 K
-# pool water) [DERIVED]:
+# Homogenized Al/water end box, 1.41806 g/cm3 [DERIVED]. The mix is exactly
+# 25 v/o Al / 75 v/o CORE water (water_core, not the 294 K pool water):
 #   Al27 1.506565e-02 / 6.026260e-02 (Al metal)   = 0.2500
 #   H1   4.969068e-02 / 6.625423e-02 (core water) = 0.7500
 # Fills the 14 cm end box above and below the fuel plates, |z| = 31 -> 45 cm
-# (ENDBOX_HEIGHT in geometry.py).
-# TECDOC-643 A-2 gives 15 cm; the reference MCNP model uses 14 cm [MCNP].
+# (ENDBOX_HEIGHT in geometry.py), and the moving cap above each blade.
+# TECDOC-643 A-2 gives 15 cm; the reference MCNP model uses 14 cm.
+# S(a,b): light water ONLY, matching the reference MCNP model. c_Al27 was on
+# this material until the reference showed no Al table on it; it is removed.
 # =============================================================================
 
 end_box_homog = openmc.Material(name='end_box_homogenized')
-end_box_homog.temperature = 316.8                      # card m00004: $ 316.8
-end_box_homog.add_nuclide('Al27', 1.506565e-02)        # card 13027
-end_box_homog.add_nuclide('H1',   4.969068e-02)        # card 1001
-end_box_homog.add_nuclide('O16',  2.484534e-02)        # card 8016
-end_box_homog.set_density('sum')                       # -> 1.41806 g/cm3
+end_box_homog.temperature = 316.8
+end_box_homog.add_nuclide('Al27', 1.506565E-02)
+end_box_homog.add_nuclide('H1',   4.969068E-02)
+end_box_homog.add_nuclide('O16',  2.484534E-02)
+end_box_homog.set_density('atom/b-cm', 8.9601670E-02)   # sum of the lines above
 end_box_homog.add_s_alpha_beta('c_H_in_H2O')
-# Al metal S(a,b) (c_Al27) on the aluminum component, added per the 2026-07-20
-# meeting decision, gated on USE_AL_SAB.
-if USE_AL_SAB:
-    end_box_homog.add_s_alpha_beta('c_Al27')
-
-# Water component is H-1 + O-16 ONLY (no H-2/O-17/O-18) per the reference
-# MCNP model.
 
 # =============================================================================
 # DEPLETION ZONING — per-element, per-(x,z)-zone fuel meat materials
