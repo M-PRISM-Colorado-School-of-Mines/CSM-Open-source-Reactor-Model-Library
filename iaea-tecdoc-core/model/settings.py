@@ -209,8 +209,9 @@ settings.output = {
 #
 # Cross sections are temperature dependent. 'interpolation' interpolates
 # between library temperatures; 'default': 294.0 makes any material WITHOUT an
-# explicit .temperature evaluate at the deck's 294 K basis instead of OpenMC's
-# built-in 293.6 K. (Flux-trap water sets its own 316.8 K explicitly.)
+# explicit .temperature evaluate at the reference MCNP model's 294 K basis
+# instead of OpenMC's built-in 293.6 K. (Flux-trap water sets its own 316.8 K
+# explicitly.)
 # =============================================================================
 
 settings.temperature = {'method': 'interpolation', 'default': 294.0}

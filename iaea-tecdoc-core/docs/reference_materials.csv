@@ -1,0 +1,20 @@
+material,description,temperature_K,thermal_scattering,nuclide,atom_density_per_b_cm
+fuel,U3Si2-Al dispersion fuel,332.1,none,U235,2.251800e-03
+fuel,U3Si2-Al dispersion fuel,332.1,none,U238,9.034100e-03
+fuel,U3Si2-Al dispersion fuel,332.1,none,Al27,3.256300e-02
+fuel,U3Si2-Al dispersion fuel,332.1,none,Si28,6.938766e-03
+fuel,U3Si2-Al dispersion fuel,332.1,none,Si29,3.524947e-04
+fuel,U3Si2-Al dispersion fuel,332.1,none,Si30,2.326390e-04
+clad,Al-6061 cladding,330.7,Al-27,Al27,6.026260e-02
+water_core,core coolant water,316.8,H in H2O,H1,6.625423e-02
+water_core,core coolant water,316.8,H in H2O,O16,3.312711e-02
+end_box_homog,25 v/o Al + 75 v/o core water,316.8,H in H2O,Al27,1.506565e-02
+end_box_homog,25 v/o Al + 75 v/o core water,316.8,H in H2O,H1,4.969068e-02
+end_box_homog,25 v/o Al + 75 v/o core water,316.8,H in H2O,O16,2.484534e-02
+graphite,graphite reflector,294.0,graphite,C (natural),8.724000e-02
+b4c,B4C absorber,294.0,none,B10,1.914973e-02
+b4c,B4C absorber,294.0,none,B11,7.010412e-02
+b4c,B4C absorber,294.0,none,C (natural),2.005592e-02
+aluminum,structural aluminum,294.0,Al-27,Al27,6.026260e-02
+water,outer pool water,294.0,H in H2O,H1,6.669090e-02
+water,outer pool water,294.0,H in H2O,O16,3.334550e-02
